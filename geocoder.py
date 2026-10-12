@@ -3,80 +3,113 @@ import time
 import requests
 
 
-NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+PHOTON_URL = "https://photon.komoot.io/api/"
 OSRM_TABLE_URL = "https://router.project-osrm.org/table/v1/driving/"
 OUTPUT_FILE = "distance_matrix.json"
 
+# Rough bounding box around India: min_lon, min_lat, max_lon, max_lat.
+# It also covers parts of neighbouring countries, so results are
+# additionally filtered by country code below.
+INDIA_BBOX = "68.1,6.5,97.5,37.1"
+COUNTRY_CODE = "IN"
+
+# If OSRM has to move a point further than this to reach a road,
+# warn the user that the location may be wrong.
+SNAP_WARNING_METRES = 1000
+
+
+def parse_place_line(answer):
+    """Parse 'Name | address or place description'. Returns (name, query) or None."""
+    if "|" not in answer:
+        print("Use this format: Name | address or place description")
+        return None
+
+    name, query = answer.split("|", 1)
+    name = name.strip()
+    query = query.strip()
+
+    if not name or not query:
+        print("Please provide both a name and a place description.")
+        return None
+
+    return name, query
+
 
 def ask_for_place(prompt):
-    """Ask for a place as: Name | address or place description."""
+    """Keep asking until the user gives a valid 'Name | description' line."""
     while True:
-        answer = input(prompt).strip()
-
-        if "|" not in answer:
-            print("Use this format: Name | address or place description")
-            continue
-
-        name, query = answer.split("|", 1)
-        name = name.strip()
-        query = query.strip()
-
-        if not name or not query:
-            print("Please provide both a name and a place description.")
-            continue
-
-        return name, query
+        parsed = parse_place_line(input(prompt).strip())
+        if parsed:
+            return parsed
 
 
-def geocode(session, name, query):
-    """Search for a place near Bhopal and let the user choose a match."""
+def search_india(session, query, bias=None):
+    """Search Photon for a place in India. Returns up to 5 Indian matches."""
+    params = {
+        "q": query,
+        "limit": 10,          # ask for extra, because we filter some out
+        "lang": "en",
+        "bbox": INDIA_BBOX,   # hard limit to India's bounding box
+    }
 
-    photon_url = "https://photon.komoot.io/api/"
+    # Soft hint: prefer results near this point (does not exclude others).
+    if bias is not None:
+        params["lon"], params["lat"] = bias
 
-    while True:
-        response = session.get(
-            photon_url,
-            params={
-                "q": query,
-                "limit": 5,
-                "lat": 23.26,
-                "lon": 77.41,
-                "lang": "en",
-            },
-            timeout=30,
+    response = session.get(PHOTON_URL, params=params, timeout=30)
+    response.raise_for_status()
+    features = response.json().get("features", [])
+
+    # The bounding box also includes bits of Nepal, Bangladesh, Pakistan, etc.
+    indian = [
+        feature for feature in features
+        if feature.get("properties", {}).get("countrycode") == COUNTRY_CODE
+    ]
+    return indian[:5]
+
+
+def describe(feature):
+    """Build a readable one-line label for a Photon result."""
+    properties = feature.get("properties", {})
+    parts = [
+        properties.get(key)
+        for key in (
+            "name", "street", "district", "city",
+            "county", "state", "postcode"
         )
-        response.raise_for_status()
-        features = response.json().get("features", [])
+    ]
+    # dict.fromkeys removes duplicates while keeping order.
+    return ", ".join(dict.fromkeys(part for part in parts if part))
+
+
+def geocode(session, name, query, bias=None):
+    """Search for a place in India and let the user choose a match."""
+
+    while True:
+        features = search_india(session, query, bias)
 
         if not features:
-            print(f"No matches found for '{query}'.")
+            print(f"No matches found in India for '{query}'.")
             query = input(
-                "Try a simpler name, such as IISER or Bhopal Junction: "
+                "Try a simpler or more specific name "
+                "(e.g. 'IISER Bhopal' or 'Chhatrapati Shivaji Terminus Mumbai'): "
             ).strip()
             continue
 
         print(f"\nChoose the correct match for {name}:")
 
         for index, feature in enumerate(features, start=1):
-            properties = feature.get("properties", {})
-            parts = [
-                properties.get(key)
-                for key in (
-                    "name", "street", "district", "city",
-                    "county", "state", "country"
-                )
-            ]
-            label = ", ".join(
-                dict.fromkeys(part for part in parts if part)
-            )
-            print(f"{index}. {label or properties}")
+            label = describe(feature)
+            print(f"{index}. {label or feature.get('properties')}")
 
         choice = input(
             "Enter the matching number, or 0 to search again: "
         ).strip()
 
         if choice == "0":
-            query = input("Enter a simpler place name: ").strip()
+            query = input(
+                "Enter a different place name (adding the city helps): "
+            ).strip()
             continue
 
         if not choice.isdigit() or not 1 <= int(choice) <= len(features):
@@ -86,11 +119,12 @@ def geocode(session, name, query):
         feature = features[int(choice) - 1]
         longitude, latitude = feature["geometry"]["coordinates"]
 
-        print("Selected:", feature["properties"].get("name", name))
+        print("Selected:", describe(feature) or name)
         print("Latitude:", latitude)
         print("Longitude:", longitude)
 
         return float(longitude), float(latitude)
+
 
 def shortest_round_trip(distance_matrix):
     """
@@ -185,16 +219,18 @@ def shortest_round_trip(distance_matrix):
 def main():
     session = requests.Session()
     session.headers.update({
-    "User-Agent": "LOCUS-Routing/1.0 (contact: abc@gmail.com)"
-})
+        "User-Agent": "LOCUS-Routing/1.0 (contact: abc@gmail.com)"
+    })
 
     print("Enter each place as: Name | address or place description")
+    print("Include the city for better matches, e.g. 'Depot | IISER Bhopal'")
+    print("or 'Gateway | Gateway of India, Mumbai'. India only.")
     print("The first location is the depot.")
     print("Press Enter on a blank line when you have entered all stops.\n")
 
     depot_name, depot_query = ask_for_place("Depot: ")
-
     places = [(depot_name, depot_query)]
+    used_names = {depot_name}
 
     while True:
         answer = input("Next stop (blank to finish): ").strip()
@@ -202,18 +238,18 @@ def main():
         if not answer:
             break
 
-        if "|" not in answer:
-            print("Use this format: Name | address or place description")
+        parsed = parse_place_line(answer)
+        if not parsed:
             continue
 
-        name, query = answer.split("|", 1)
-        name = name.strip()
-        query = query.strip()
+        name, query = parsed
 
-        if not name or not query:
-            print("Please provide both a name and a place description.")
+        # Coordinates are stored by name, so names must be unique.
+        if name in used_names:
+            print(f"'{name}' is already used. Please pick a different name.")
             continue
 
+        used_names.add(name)
         places.append((name, query))
 
     if len(places) < 2:
@@ -221,14 +257,19 @@ def main():
 
     names = [name for name, _ in places]
     coordinates = {}
+    bias = None  # first search has no location hint
 
-    # Nominatim's public service asks clients to make requests politely.
     for index, (name, query) in enumerate(places):
         print(f"\nSearching for {name}: {query}")
-        coordinates[name] = geocode(session, name, query)
+        coordinates[name] = geocode(session, name, query, bias)
+
+        # After the depot is chosen, use it as a soft hint so ambiguous
+        # names (e.g. "Railway Station") rank closer places first.
+        if bias is None:
+            bias = coordinates[name]
 
         if index < len(places) - 1:
-            time.sleep(1)
+            time.sleep(1)  # be polite to the public service
 
     coordinate_string = ";".join(
         f"{coordinates[name][0]},{coordinates[name][1]}"
@@ -249,10 +290,9 @@ def main():
 
     print("\n--- Road access checks ---")
     for name, waypoint in zip(names, data["sources"]):
-        print(
-            f"{name}: "
-            f"{waypoint['distance']:.1f} metres from the snapped road point"
-        )
+        snap = waypoint["distance"]
+        warning = "  <-- check this location" if snap > SNAP_WARNING_METRES else ""
+        print(f"{name}: {snap:.1f} metres from the snapped road point{warning}")
 
     raw_distances = data["distances"]
 
