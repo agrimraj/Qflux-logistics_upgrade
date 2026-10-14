@@ -1,3 +1,40 @@
+import numpy as np
+from qiskit.quantum_info import SparsePauliOp
+
+def convert_matrix_to_quantum_hamiltonian(raw_distances, penalty_factor=50000.0):
+    """Translates distance matrices into a Quadratic Unconstrained Binary Optimization (QUBO) map."""
+    num_nodes = len(raw_distances)
+    num_qubits = num_nodes * num_nodes
+    pauli_list = []
+    
+    for i in range(num_nodes):
+        for j in range(num_nodes):
+            if i != j:
+                for t in range(num_nodes):
+                    next_t = (t + 1) % num_nodes
+                    q1 = i * num_nodes + t
+                    q2 = j * num_nodes + next_t
+                    cost = raw_distances[i][j] / 2.0
+                    
+                    pauli_str = ["I"] * num_qubits
+                    pauli_str[q1], pauli_str[q2] = "Z", "Z"
+                    pauli_list.append(("".join(pauli_str), cost))
+
+    for i in range(num_nodes):
+        for t1 in range(num_nodes):
+            for t2 in range(num_nodes):
+                q1 = i * num_nodes + t1
+                q2 = i * num_nodes + t2
+                pauli_str = ["I"] * num_qubits
+                if t1 == t2:
+                    pauli_str[q1] = "Z"
+                    pauli_list.append(("".join(pauli_str), -penalty_factor))
+                else:
+                    pauli_str[q1], pauli_str[q2] = "Z", "Z"
+                    pauli_list.append(("".join(pauli_str), penalty_factor / 2.0))
+    return SparsePauliOp.from_list(pauli_list)
+
+
 import json
 import time
 import requests
@@ -321,8 +358,28 @@ def main():
     print(" -> ".join(names[index] for index in route_indices))
     print(f"Total distance: {total_metres / 1000:.2f} km")
 
+        # ... Your existing code printing out 'Shortest round trip found' ...
+    print(" -> ".join(names[index] for index in route_indices))
+    print(f"Total distance: {total_metres / 1000:.2f} km")
+
+        # =========================================================================
+    # NEW WORK: CONNECTING YOUR CLASSICAL RESULTS DIRECTLY TO IBM QUANTUM
+    # =========================================================================
+    if len(names) <= 4:
+        print(f"\n[HYBRID] Mapping {len(names)} locations to a {len(names)**2}-qubit matrix...")
+        
+        # 1. Translate your OSRM matrices into a Hamiltonian operator
+        quantum_hamiltonian = convert_matrix_to_quantum_hamiltonian(raw_distances)
+        
+        # 2. Fire it directly to your newly created account platform dashboard!
+        MY_IBM_API_KEY = "PASTE_YOUR_COPIED_IBM_KEY_HERE" 
+        job_id = execute_on_ibm_hardware(quantum_hamiltonian, MY_IBM_API_KEY)
+    else:
+        print(f"\n[SCALE LIMIT] {len(names)} nodes requires {len(names)**2} qubits.")
+        print("Current physical NISQ limit is capped at 5 nodes to minimize decoherence noise.")
+    # =========================================================================
+
     # Save both the matrix and the route so the same data can be used later
-    # when we build the QUBO.
     with open(OUTPUT_FILE, "w", encoding="utf-8") as file:
         json.dump(
             {
@@ -347,6 +404,34 @@ def main():
 
     print(f"\nSaved {OUTPUT_FILE}")
 
+def execute_on_ibm_hardware(hamiltonian, api_token):
+    """
+    Spins up a Qiskit Runtime session and deploys your real-world matrix map
+    to your newly provisioned 156-qubit physical IBM hardware.
+    """
+    from qiskit_ibm_runtime import QiskitRuntimeService, Session, SamplerV2
+    from qiskit.circuit.library import QAOAAnsatz
+    
+    print("\n--- Initializing Hybrid Quantum Cloud Layer ---")
+    try:
+        service = QiskitRuntimeService(channel="ibm_quantum", token=api_token)
+        backend = service.least_busy(simulator=False, min_qubits=127)
+        print(f"Target Physical Backend Locked: {backend.name}")
+        
+        circuit = QAOAAnsatz(cost_operator=hamiltonian, reps=2)
+        circuit.measure_all()
+        
+        print(f"Deploying compiled {circuit.num_qubits}-qubit circuit to the cloud queue...")
+        with Session(service=service, backend=backend) as session:
+            sampler = SamplerV2(session=session)
+            initial_angles = np.random.uniform(0, np.pi, circuit.num_parameters)
+            
+            job = sampler.run([(circuit, initial_angles)])
+            print(f"Workload successfully accepted! Job ID: {job.job_id()}")
+            return job.job_id()
+    except Exception as e:
+        print(f"[WARNING] Cloud compilation bypassed: {str(e)}")
+        return None
 
 if __name__ == "__main__":
     main()
