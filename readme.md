@@ -1,7 +1,7 @@
 # QFlux: End-to-End Hybrid Quantum-Classical Logistics Routing Engine
 
 ### 👥 Team Credentials & Hub Infrastructure
-* **Team Name / Members:** Agrim Raj & Partner
+* **Team Name / Members:** Agrim Raj & Srijat Mukhopadhyay
 * **Institution:** Indian Institute of Science Education and Research (IISER), Bhopal
 * **Event Track:** Track 3 - QAOA and Optimization (Problem 5/6 System Extension)
 * **Target Environment:** Python 3.14 (Platform Pinned Framework)
