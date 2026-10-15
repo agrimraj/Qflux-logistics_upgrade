@@ -26,14 +26,14 @@ The application resolves the **Traveling Salesperson Problem (TSP)** using true 
 ### A. Algorithmic Scalability Engine Crossover Analysis
 This benchmark documents the mathematical boundary transition separating classical computing dominance from the quantum execution zone. While our exact Held-Karp solver remains highly efficient for low node counts, it hits a vertical exponential execution wall (\(O(2^n \cdot n^2)\) complexity) near 14 hubs. Conversely, our space-optimized QAOA layout handles nodes scaling via a flatter, predictable polynomial curve, compressing active state configurations down to \((n-1)^2\) qubits.
 
-![Scalability Crossover Analysis](figures/scalability_crossover.png)
+![Scalability Crossover Analysis](scalability_crossover.png)
 
 ### B. Physical Hardware Shot Distribution (ibm_marrakesh Validation)
 This metric captures the raw validation sampling results retrieved from the 156-qubit physical Heron-generation computer over the cloud under **Job ID `db7sgs0r1c5c73817fvg`** on **October 14, 2026**. 
 
 Out of 4,000 parallel universe hardware trial measurements (shots), the baseline noise floor representing environmental gate errors and decoherence parameters common to the NISQ era is heavy. However, our precise Ising Hamiltonian penalty constraints successfully filter out the chaos—forcing the absolute optimal tour path sequence to spike clearly above the ambient noise configurations to establish perfect structural path convergence truth.
 
-![Physical QPU Hardware Shot Distribution](figures/quantum_shot_distribution.png)
+![Physical QPU Hardware Shot Distribution](quantum_shot_distribution.png)
 
 ---
 
